@@ -1,5 +1,12 @@
-1. Project Name: *add short name for your project*
-2. Members: *add member names and email addresses*
-3. Topic/Goals:  *add brief description of the topic/goals of you project*
+# Discrete Cosine Transform (DCT) using CUDA
 
-Please use the provided subdirectories to organize your work: src, references, and presentation
+## Group Members:
+- Ayaan
+- Jianfei
+- Nandini
+- Alessandro
+
+## Topics/Goals:
+This project explores the implementation of Discrete Cosine Transform (DCT) using CUDA. DCT is a Fourier-related transform similar to the discrete Fourier transform. DCT is a widely used technique in signal processing and data compression, most notably in JPEG’s image compression. Beyond static images, DCT powers feature extraction in machine learning, real-time video compression for streaming services like Netflix and YouTube, and medical imaging such as MRIs.
+
+While there are existing implementations of DCT, we plan to build an optimized version with different algorithms on a GPU.
