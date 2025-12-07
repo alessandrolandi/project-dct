@@ -1,6 +1,7 @@
 #include <cuda_runtime.h>
 #include <stdio.h>
 #include <math.h>
+#include "dct.cuh"
 
 #define PI 3.1415926535f
 
