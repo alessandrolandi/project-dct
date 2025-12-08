@@ -4,7 +4,6 @@
 #include <math.h>
 #include <cuda_runtime.h>
 #include "lib/parser.h"
-#include "dct.cuh"
 
 //standard JPEG quantization tables
 __constant__ uint8_t d_quant_luma[64] = {
@@ -16,6 +15,17 @@ __constant__ uint8_t d_quant_luma[64] = {
     24, 35, 55, 64,  81, 104, 113,  92,
     49, 64, 78, 87, 103, 121, 120, 101,
     72, 92, 95, 98, 112, 100, 103,  99
+};
+
+__constant__ uint8_t d_quant_chroma[64] = {
+    17, 18, 18, 24, 30,  40,  51,  61,
+    18, 21, 24, 30, 40,  58,  60,  55,
+    18, 24, 26, 35, 50,  57,  69,  56,
+    24, 30, 35, 40, 60,  80,  80,  70,
+    30, 40, 50, 60, 70,  95,  95,  80,
+    40, 58, 57, 69, 80,  95, 105,  90,
+    51, 60, 69, 80, 95, 110, 115, 100,
+    61, 55, 56, 70, 80,  90, 100,  95
 };
 
 //standard Huffman tables
@@ -53,30 +63,44 @@ static const uint8_t std_ac_luminance_vals[162] = {
     0xf9, 0xfa
 };
 
-//zigzag order for 8x8 blocks
+//zigzag order for 8x8 blocks (JPEG standard ITU-T T.81 Figure A.6)
 static const uint8_t zigzag[64] = {
-     0,  1,  5,  6, 14, 15, 27, 28,
-     2,  4,  7, 13, 16, 26, 29, 42,
-     3,  8, 12, 17, 25, 30, 41, 43,
-     9, 11, 18, 24, 31, 40, 44, 53,
-    10, 19, 23, 32, 39, 45, 52, 54,
-    20, 22, 33, 38, 46, 51, 55, 60,
-    21, 34, 37, 47, 50, 56, 59, 61,
-    35, 36, 48, 49, 57, 58, 62, 63
+     0,  1,  8, 16,  9,  2,  3, 10,
+    17, 24, 32, 25, 18, 11,  4,  5,
+    12, 19, 26, 33, 40, 48, 41, 34,
+    27, 20, 13,  6,  7, 14, 21, 28,
+    35, 42, 49, 56, 57, 50, 43, 36,
+    29, 22, 15, 23, 30, 37, 44, 51,
+    58, 59, 52, 45, 38, 31, 39, 46,
+    53, 60, 61, 54, 47, 55, 62, 63
 };
 
 //cuda kernel: quantize DCT coefficients
 __global__ void quantize_kernel(float *dct_blocks, int16_t *quantized,
-                                int num_blocks, int quality) {
+                                int num_blocks, int blocks_per_channel, int quality) {
     int block_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (block_idx < num_blocks) {
-        int scale = (quality < 50) ? (5000 / quality) : (200 - 2 * quality);
+        //quality scaling
+        float scale;
+        if (quality >= 98) {
+            scale = (100.0f - quality) * 0.05f;
+            if (scale < 0.001f) scale = 0.001f;
+        } else if (quality >= 90) {
+            scale = (100.0f - quality) / 50.0f;
+        } else if (quality >= 50) {
+            scale = (100.0f - quality) / 10.0f;
+        } else {
+            scale = 5000.0f / quality / 100.0f;
+        }
+
+        //determine which channel
+        int channel = block_idx / blocks_per_channel;
+        const uint8_t *quant_table = (channel == 0) ? d_quant_luma : d_quant_chroma;
 
         for (int i = 0; i < 64; i++) {
-            int q_value = (d_quant_luma[i] * scale + 50) / 100;
-            if (q_value < 1) q_value = 1;
-            if (q_value > 255) q_value = 255;
+            float q_value = quant_table[i] * scale;
+            if (q_value < 1.0f) q_value = 1.0f;
 
             int idx = block_idx * 64 + i;
             quantized[idx] = (int16_t)roundf(dct_blocks[idx] / q_value);
@@ -262,17 +286,21 @@ static void write_app0(FILE *fp) {
 
 //write DQT segment
 static void write_dqt(FILE *fp, int quality) {
-    write_marker(fp, JPEG_DQT);
-    write_u16(fp, 67);  //length
+    //quality scaling
+    float scale;
+    if (quality >= 98) {
+        scale = (100.0f - quality) * 0.05f;
+        if (scale < 0.001f) scale = 0.001f;
+    } else if (quality >= 90) {
+        scale = (100.0f - quality) / 50.0f;
+    } else if (quality >= 50) {
+        scale = (100.0f - quality) / 10.0f;
+    } else {
+        scale = 5000.0f / quality / 100.0f;
+    }
 
-    uint8_t table_id = 0;
-    fwrite(&table_id, 1, 1, fp);
-
-    //scale quantization table by quality
-    int scale = (quality < 50) ? (5000 / quality) : (200 - 2 * quality);
-    uint8_t quant_table[64];
-
-    uint8_t std_quant[64] = {
+    //luminance quantization table
+    uint8_t std_quant_luma[64] = {
         16, 11, 10, 16,  24,  40,  51,  61,
         12, 12, 14, 19,  26,  58,  60,  55,
         14, 13, 16, 24,  40,  57,  69,  56,
@@ -283,8 +311,40 @@ static void write_dqt(FILE *fp, int quality) {
         72, 92, 95, 98, 112, 100, 103,  99
     };
 
+    write_marker(fp, JPEG_DQT);
+    write_u16(fp, 67);
+    uint8_t table_id = 0;
+    fwrite(&table_id, 1, 1, fp);
+
+    uint8_t quant_table[64];
     for (int i = 0; i < 64; i++) {
-        int q = (std_quant[i] * scale + 50) / 100;
+        int q = (int)(std_quant_luma[i] * scale + 0.5f);
+        if (q < 1) q = 1;
+        if (q > 255) q = 255;
+        quant_table[i] = q;
+    }
+
+    fwrite(quant_table, 1, 64, fp);
+
+    //chrominance quantization table
+    uint8_t std_quant_chroma[64] = {
+        17, 18, 18, 24, 30,  40,  51,  61,
+        18, 21, 24, 30, 40,  58,  60,  55,
+        18, 24, 26, 35, 50,  57,  69,  56,
+        24, 30, 35, 40, 60,  80,  80,  70,
+        30, 40, 50, 60, 70,  95,  95,  80,
+        40, 58, 57, 69, 80,  95, 105,  90,
+        51, 60, 69, 80, 95, 110, 115, 100,
+        61, 55, 56, 70, 80,  90, 100,  95
+    };
+
+    write_marker(fp, JPEG_DQT);
+    write_u16(fp, 67);
+    table_id = 1;
+    fwrite(&table_id, 1, 1, fp);
+
+    for (int i = 0; i < 64; i++) {
+        int q = (int)(std_quant_chroma[i] * scale + 0.5f);
         if (q < 1) q = 1;
         if (q > 255) q = 255;
         quant_table[i] = q;
@@ -296,22 +356,25 @@ static void write_dqt(FILE *fp, int quality) {
 //write SOF0 segment
 static void write_sof0(FILE *fp, int width, int height) {
     write_marker(fp, JPEG_SOF0);
-    write_u16(fp, 11);  //length for 1 component
+    write_u16(fp, 17);  //length for 3 components: 8 + 3*3 = 17
 
     uint8_t precision = 8;
     fwrite(&precision, 1, 1, fp);
     write_u16(fp, height);
     write_u16(fp, width);
 
-    uint8_t num_components = 1;  //greyscale
+    uint8_t num_components = 3;  //RGB
     fwrite(&num_components, 1, 1, fp);
 
-    uint8_t comp_id = 1;
-    uint8_t sampling = 0x11;  //1x1
-    uint8_t qt_id = 0;
-    fwrite(&comp_id, 1, 1, fp);
-    fwrite(&sampling, 1, 1, fp);
-    fwrite(&qt_id, 1, 1, fp);
+    //write Y, Cb, Cr components
+    for (int i = 0; i < 3; i++) {
+        uint8_t comp_id = i + 1;       //1=Y, 2=Cb, 3=Cr
+        uint8_t sampling = 0x11;       //1x1 sampling (no subsampling)
+        uint8_t qt_id = (i == 0) ? 0 : 1;  //Y uses table 0, Cb/Cr use table 1
+        fwrite(&comp_id, 1, 1, fp);
+        fwrite(&sampling, 1, 1, fp);
+        fwrite(&qt_id, 1, 1, fp);
+    }
 }
 
 //write DHT segment
@@ -329,17 +392,20 @@ static void write_dht(FILE *fp, uint8_t table_class, uint8_t table_id,
 //write SOS segment
 static void write_sos(FILE *fp) {
     write_marker(fp, JPEG_SOS);
-    write_u16(fp, 8);  //Length for 1 component
+    write_u16(fp, 12);  //length for 3 components: 6 + 3*2 = 12
 
-    uint8_t num_components = 1;
+    uint8_t num_components = 3;  //RGB
     fwrite(&num_components, 1, 1, fp);
 
-    uint8_t comp_id = 1;
-    uint8_t tables = 0x00;  //DC0, AC0
-    fwrite(&comp_id, 1, 1, fp);
-    fwrite(&tables, 1, 1, fp);
+    //write component selectors for R, G, B
+    for (int i = 0; i < 3; i++) {
+        uint8_t comp_id = i + 1;      
+        uint8_t tables = 0x00;         //DC0, AC0 (same tables for all)
+        fwrite(&comp_id, 1, 1, fp);
+        fwrite(&tables, 1, 1, fp);
+    }
 
-    uint8_t spectral[3] = {0, 63, 0};
+    uint8_t spectral[3] = {0, 63, 0};  //start, End, Successive approximation
     fwrite(spectral, 1, 3, fp);
 }
 
@@ -364,59 +430,85 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality) 
     int blocks_y = (height + 7) / 8;
     int num_blocks = blocks_x * blocks_y;
 
-    float *h_dct_blocks = (float*)malloc(num_blocks * 64 * sizeof(float));
-    int16_t *h_quantized = (int16_t*)malloc(num_blocks * 64 * sizeof(int16_t));
+    //allocate for 3 color channels (R, G, B)
+    float *h_dct_blocks = (float*)malloc(3 * num_blocks * 64 * sizeof(float));
+    int16_t *h_quantized = (int16_t*)malloc(3 * num_blocks * 64 * sizeof(int16_t));
 
-    //extract blocks and apply DCT (use luminance: average of RGB)
-    for (int by = 0; by < blocks_y; by++) {
-        for (int bx = 0; bx < blocks_x; bx++) {
-            float block[64];
-            float dct_block[64];
+    printf("Processing %d blocks (%dx%d) x 3 channels\n", num_blocks, blocks_x, blocks_y);
 
-            //extract 8x8 block (convert RGB to grayscale: Y = 0.299R + 0.587G + 0.114B)
-            for (int y = 0; y < 8; y++) {
-                for (int x = 0; x < 8; x++) {
-                    int img_x = bx * 8 + x;
-                    int img_y = by * 8 + y;
+    //process each color channel (convert RGB to YCbCr)
+    for (int channel = 0; channel < 3; channel++) {
+        const char *channel_name[] = {"Y (Luminance)", "Cb (Blue Chroma)", "Cr (Red Chroma)"};
+        printf("Processing %s channel...\n", channel_name[channel]);
 
-                    if (img_x < width && img_y < height) {
-                        int idx = img_y * width + img_x;
-                        //greyscale average of RGB
-                        block[y * 8 + x] = (pixels[idx].r + pixels[idx].g + pixels[idx].b) / 3.0f;
-                    } else {
-                        block[y * 8 + x] = 0.0f;
+        for (int by = 0; by < blocks_y; by++) {
+            for (int bx = 0; bx < blocks_x; bx++) {
+                float block[64];
+                float dct_block[64];
+
+                //extract 8x8 block and convert RGB to YCbCr
+                for (int y = 0; y < 8; y++) {
+                    for (int x = 0; x < 8; x++) {
+                        int img_x = bx * 8 + x;
+                        int img_y = by * 8 + y;
+
+                        if (img_x < width && img_y < height) {
+                            int idx = img_y * width + img_x;
+
+                            float r = pixels[idx].r;
+                            float g = pixels[idx].g;
+                            float b = pixels[idx].b;
+
+                            //convert RGB to YCbCr (JPEG color space)
+                            //Y  =  0.299*R + 0.587*G + 0.114*B
+                            //Cb = -0.168736*R - 0.331264*G + 0.5*B
+                            //Cr =  0.5*R - 0.418688*G - 0.081312*B
+                            if (channel == 0) {
+                                //Y (luminance)
+                                block[y * 8 + x] = 0.299f * r + 0.587f * g + 0.114f * b;
+                            } else if (channel == 1) {
+                                //Cb (blue chroma)
+                                block[y * 8 + x] = -0.168736f * r - 0.331264f * g + 0.5f * b;
+                            } else {
+                                //Cr (red chroma)
+                                block[y * 8 + x] = 0.5f * r - 0.418688f * g - 0.081312f * b;
+                            }
+                        } else {
+                            block[y * 8 + x] = 0.0f;
+                        }
                     }
                 }
+
+                //apply 2D DCT using reference implementation
+                dct_8x8_reference(block, dct_block);
+
+                //copy to flat array (channel offset + block offset)
+                int block_idx = channel * num_blocks + by * blocks_x + bx;
+                memcpy(&h_dct_blocks[block_idx * 64], dct_block, 64 * sizeof(float));
             }
-
-            //apply 2D DCT
-            dct2d(block, dct_block, 8, 8);
-
-            //copy to flat array
-            int block_idx = by * blocks_x + bx;
-            memcpy(&h_dct_blocks[block_idx * 64], dct_block, 64 * sizeof(float));
         }
     }
 
-    //allocate device memory
+    //allocate device memory for 3 channels
     float *d_dct_blocks;
     int16_t *d_quantized;
-    cudaMalloc(&d_dct_blocks, num_blocks * 64 * sizeof(float));
-    cudaMalloc(&d_quantized, num_blocks * 64 * sizeof(int16_t));
+    int total_blocks = 3 * num_blocks;  //3 color channels
+    cudaMalloc(&d_dct_blocks, total_blocks * 64 * sizeof(float));
+    cudaMalloc(&d_quantized, total_blocks * 64 * sizeof(int16_t));
 
     //copy to device
-    cudaMemcpy(d_dct_blocks, h_dct_blocks, num_blocks * 64 * sizeof(float),
+    cudaMemcpy(d_dct_blocks, h_dct_blocks, total_blocks * 64 * sizeof(float),
                cudaMemcpyHostToDevice);
 
-    //quantize on GPU
+    //quantize on GPU (all 3 channels)
+    printf("Quantizing on GPU (quality=%d)...\n", quality);
     int threads = 256;
-    int blocks = (num_blocks + threads - 1) / threads;
-    quantize_kernel<<<blocks, threads>>>(d_dct_blocks, d_quantized, num_blocks, quality);
+    int blocks = (total_blocks + threads - 1) / threads;
+    quantize_kernel<<<blocks, threads>>>(d_dct_blocks, d_quantized, total_blocks, num_blocks, quality);
     cudaDeviceSynchronize();
 
     //copy back quantized coefficients
-    cudaMemcpy(h_quantized, d_quantized, num_blocks * 64 * sizeof(int16_t),
-               cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_quantized, d_quantized, total_blocks * 64 * sizeof(int16_t), cudaMemcpyDeviceToHost);
 
     //build Huffman tables
     HuffmanTable dc_table, ac_table;
@@ -427,9 +519,22 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality) 
     BitstreamWriter bs;
     init_bitstream(&bs);
 
-    int dc_pred = 0;
-    for (int i = 0; i < num_blocks; i++) {
-        encode_block(&bs, &dc_table, &ac_table, &h_quantized[i * 64], &dc_pred);
+    printf("Huffman encoding %d blocks x 3 channels...\n", num_blocks);
+
+    //encode all 3 channels 
+    int dc_pred[3] = {0, 0, 0};  //separate DC predictor for each channel
+
+    for (int by = 0; by < blocks_y; by++) {
+        for (int bx = 0; bx < blocks_x; bx++) {
+            int block_pos = by * blocks_x + bx;
+
+            //encode R, G, B for this block position
+            for (int channel = 0; channel < 3; channel++) {
+                int block_idx = channel * num_blocks + block_pos;
+                encode_block(&bs, &dc_table, &ac_table,
+                           &h_quantized[block_idx * 64], &dc_pred[channel]);
+            }
+        }
     }
     finish_bits(&bs);
 

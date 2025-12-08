@@ -1,8 +1,9 @@
 #include <cuda_runtime.h>
 #include <stdio.h>
 #include <math.h>
+#include "dct.cuh"
 
-#define PI 3.1415
+#define PI 3.14159265358979323846
 
 // 1D DCT-II kernel (basic version)
 __global__ void dct1d_kernel(const float* input, float* output, int N) {
@@ -181,10 +182,10 @@ void idct2d(const float* h_input, float* h_output, int rows, int cols) {
     dim3 blockSize(16, 16);
     dim3 gridSize((cols + 15) / 16, (rows + 15) / 16);
 
-    //apply IDCT to rows first
+    // Apply IDCT to rows first
     idct2d_rows_kernel<<<gridSize, blockSize>>>(d_input, d_temp, rows, cols);
 
-    //apply IDCT to columns
+    // Apply IDCT to columns
     idct2d_cols_kernel<<<gridSize, blockSize>>>(d_temp, d_output, rows, cols);
 
     cudaMemcpy(h_output, d_output, size, cudaMemcpyDeviceToHost);
