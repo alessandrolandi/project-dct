@@ -63,7 +63,7 @@ static const uint8_t std_ac_luminance_vals[162] = {
     0xf9, 0xfa
 };
 
-//zigzag order for 8x8 blocks (JPEG standard ITU-T T.81 Figure A.6)
+//zigzag order for 8x8 blocks 
 static const uint8_t zigzag[64] = {
      0,  1,  8, 16,  9,  2,  3, 10,
     17, 24, 32, 25, 18, 11,  4,  5,
@@ -356,14 +356,14 @@ static void write_dqt(FILE *fp, int quality) {
 //write SOF0 segment
 static void write_sof0(FILE *fp, int width, int height) {
     write_marker(fp, JPEG_SOF0);
-    write_u16(fp, 17);  //length for 3 components: 8 + 3*3 = 17
+    write_u16(fp, 17);  //length for 3 components
 
     uint8_t precision = 8;
     fwrite(&precision, 1, 1, fp);
     write_u16(fp, height);
     write_u16(fp, width);
 
-    uint8_t num_components = 3;  //RGB
+    uint8_t num_components = 3;  //rgb
     fwrite(&num_components, 1, 1, fp);
 
     //write Y, Cb, Cr components
@@ -392,20 +392,20 @@ static void write_dht(FILE *fp, uint8_t table_class, uint8_t table_id,
 //write SOS segment
 static void write_sos(FILE *fp) {
     write_marker(fp, JPEG_SOS);
-    write_u16(fp, 12);  //length for 3 components: 6 + 3*2 = 12
+    write_u16(fp, 12);  //length for 3 components
 
-    uint8_t num_components = 3;  //RGB
+    uint8_t num_components = 3;  //rgb
     fwrite(&num_components, 1, 1, fp);
 
-    //write component selectors for R, G, B
+    //write component selectors for rgb
     for (int i = 0; i < 3; i++) {
         uint8_t comp_id = i + 1;      
-        uint8_t tables = 0x00;         //DC0, AC0 (same tables for all)
+        uint8_t tables = 0x00;         //DC0, AC0 
         fwrite(&comp_id, 1, 1, fp);
         fwrite(&tables, 1, 1, fp);
     }
 
-    uint8_t spectral[3] = {0, 63, 0};  //start, End, Successive approximation
+    uint8_t spectral[3] = {0, 63, 0};  //start, end, successive approximation
     fwrite(spectral, 1, 3, fp);
 }
 
@@ -430,23 +430,21 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality) 
     int blocks_y = (height + 7) / 8;
     int num_blocks = blocks_x * blocks_y;
 
-    //allocate for 3 color channels (R, G, B)
+    //allocate for 3 color channels rgb
     float *h_dct_blocks = (float*)malloc(3 * num_blocks * 64 * sizeof(float));
     int16_t *h_quantized = (int16_t*)malloc(3 * num_blocks * 64 * sizeof(int16_t));
 
-    printf("Processing %d blocks (%dx%d) x 3 channels\n", num_blocks, blocks_x, blocks_y);
 
-    //process each color channel (convert RGB to YCbCr)
+    //process each color channel convert rgb to YCbCr
     for (int channel = 0; channel < 3; channel++) {
         const char *channel_name[] = {"Y (Luminance)", "Cb (Blue Chroma)", "Cr (Red Chroma)"};
-        printf("Processing %s channel...\n", channel_name[channel]);
 
         for (int by = 0; by < blocks_y; by++) {
             for (int bx = 0; bx < blocks_x; bx++) {
                 float block[64];
                 float dct_block[64];
 
-                //extract 8x8 block and convert RGB to YCbCr
+                //extract 8x8 block and convert rgb to YCbCr
                 for (int y = 0; y < 8; y++) {
                     for (int x = 0; x < 8; x++) {
                         int img_x = bx * 8 + x;
@@ -459,7 +457,7 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality) 
                             float g = pixels[idx].g;
                             float b = pixels[idx].b;
 
-                            //convert RGB to YCbCr (JPEG color space)
+                            //convert rgb to YCbCr 
                             //Y  =  0.299*R + 0.587*G + 0.114*B
                             //Cb = -0.168736*R - 0.331264*G + 0.5*B
                             //Cr =  0.5*R - 0.418688*G - 0.081312*B
@@ -497,11 +495,9 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality) 
     cudaMalloc(&d_quantized, total_blocks * 64 * sizeof(int16_t));
 
     //copy to device
-    cudaMemcpy(d_dct_blocks, h_dct_blocks, total_blocks * 64 * sizeof(float),
-               cudaMemcpyHostToDevice);
+    cudaMemcpy(d_dct_blocks, h_dct_blocks, total_blocks * 64 * sizeof(float), cudaMemcpyHostToDevice);
 
     //quantize on GPU (all 3 channels)
-    printf("Quantizing on GPU (quality=%d)...\n", quality);
     int threads = 256;
     int blocks = (total_blocks + threads - 1) / threads;
     quantize_kernel<<<blocks, threads>>>(d_dct_blocks, d_quantized, total_blocks, num_blocks, quality);
@@ -519,8 +515,6 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality) 
     BitstreamWriter bs;
     init_bitstream(&bs);
 
-    printf("Huffman encoding %d blocks x 3 channels...\n", num_blocks);
-
     //encode all 3 channels 
     int dc_pred[3] = {0, 0, 0};  //separate DC predictor for each channel
 
@@ -528,7 +522,7 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality) 
         for (int bx = 0; bx < blocks_x; bx++) {
             int block_pos = by * blocks_x + bx;
 
-            //encode R, G, B for this block position
+            //encode rgb for this block position
             for (int channel = 0; channel < 3; channel++) {
                 int block_idx = channel * num_blocks + block_pos;
                 encode_block(&bs, &dc_table, &ac_table,
@@ -561,8 +555,6 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality) 
     write_marker(fp, JPEG_EOI);
 
     fclose(fp);
-
-    printf("Successfully wrote JPEG file (%d bytes entropy data)\n", bs.buffer_pos);
 
     //cleanup
     cudaFree(d_dct_blocks);
