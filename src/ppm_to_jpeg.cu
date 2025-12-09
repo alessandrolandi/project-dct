@@ -4,6 +4,7 @@
 #include <math.h>
 #include <cuda_runtime.h>
 #include "lib/parser.h"
+#include "dct.cuh"
 
 //standard JPEG quantization tables
 __constant__ uint8_t d_quant_luma[64] = {
@@ -424,7 +425,6 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality) 
     int height = ppm_img->height;
     Pixel *pixels = ppm_img->pixels;
 
-
     //calculate blocks
     int blocks_x = (width + 7) / 8;
     int blocks_y = (height + 7) / 8;
@@ -478,7 +478,7 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality) 
                 }
 
                 //apply 2D DCT using reference implementation
-                dct_8x8_reference(block, dct_block);
+                dct2d(block, dct_block, 8, 8);
 
                 //copy to flat array (channel offset + block offset)
                 int block_idx = channel * num_blocks + by * blocks_x + bx;
@@ -567,7 +567,7 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality) 
     return 1;
 }
 
-int ppm_to_jpeg(const char *input_file, const char *output_filie, int quality){
+int ppm_to_jpg(const char *input_file, const char *output_file, int quality){
     if (quality < 1 || quality > 100) {
         fprintf(stderr, "Quality must be 1-100\n");
         return 1;
@@ -577,7 +577,26 @@ int ppm_to_jpeg(const char *input_file, const char *output_filie, int quality){
         fprintf(stderr, "Compression failed\n");
         return 1;
     }
-
     return 0;
 }
 
+/*
+Example usage
+
+int main(int argc, char *argv[]) {
+    if (argc < 3) {
+        printf("Usage: %s <input.ppm> <output.jpg> [quality]\n", argv[0]);
+        printf("  input.ppm  - Uncompressed PPM image file\n");
+        printf("  output.jpg - Output JPEG file\n");
+        printf("  quality    - 1-100 (default: 85, higher = better quality)\n");
+        return 1;
+    }
+
+    const char *input_file = argv[1];
+    const char *output_file = argv[2];
+    int quality = (argc > 3) ? atoi(argv[3]) : 85;
+
+    ppm_to_jpg(input_file, output_file, quality);
+}
+
+*/
