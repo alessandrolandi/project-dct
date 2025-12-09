@@ -567,19 +567,7 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality) 
     return 1;
 }
 
-int main(int argc, char *argv[]) {
-    if (argc < 3) {
-        printf("Usage: %s <input.ppm> <output.jpg> [quality]\n", argv[0]);
-        printf("  input.ppm  - Uncompressed PPM image file\n");
-        printf("  output.jpg - Output JPEG file\n");
-        printf("  quality    - 1-100 (default: 85, higher = better quality)\n");
-        return 1;
-    }
-
-    const char *input_file = argv[1];
-    const char *output_file = argv[2];
-    int quality = (argc > 3) ? atoi(argv[3]) : 85;
-
+int ppm_to_jpeg(const char *input_file, const char *output_filie, int quality){
     if (quality < 1 || quality > 100) {
         fprintf(stderr, "Quality must be 1-100\n");
         return 1;
@@ -589,5 +577,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Compression failed\n");
         return 1;
     }
+
     return 0;
 }
+
