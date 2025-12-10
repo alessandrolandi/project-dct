@@ -1,0 +1,360 @@
+\documentclass{article}
+
+% Language setting
+% Replace `english' with e.g. `spanish' to change the document language
+\usepackage[english]{babel}
+
+% Set page size and margins
+% Replace `letterpaper' with `a4paper' for UK/EU standard size
+\usepackage[letterpaper,top=2cm,bottom=2cm,left=3cm,right=3cm,marginparwidth=1.75cm]{geometry}
+
+% Useful packages
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[colorlinks=true, allcolors=blue]{hyperref}
+
+\title{Discrete Cosine Transform}
+\author{authors}
+
+\begin{document}
+\maketitle
+\newpage
+
+\section{Introduction}
+
+\subsection{Overview and Motivation}
+
+This project explores GPU-accelerated implementations of the Discrete Cosine Transform (DCT), a fundamental technique in signal processing and data compression. DCT forms the mathematical foundation of JPEG image compression and is essential for video codecs, audio compression, machine learning feature extraction, and medical image processing.
+
+Despite its widespread use, DCT computation presents significant performance challenges. Naive implementations scale poorly for high-resolution images and real-time video processing, creating bottlenecks in streaming services, mobile video calls, and cloud-based image processing. While GPU parallelization offers substantial acceleration potential, existing GPU-based DCT algorithms remain relatively understudied compared to CPU implementations, with most optimized versions being closed-source or proprietary.
+
+This work addresses this gap by implementing and evaluating multiple DCT algorithms on GPU hardware. We explore approaches ranging from direct evaluation to matrix multiplication reformulations, FFT-based methods, and specialized block-wise implementations, comparing their performance characteristics across different problem scales and application contexts.
+
+
+\section{Discrete Cosine Transform}
+
+\subsection{Definition of the DCT}
+
+Among the eight standard variants of the DCT, the DCT Type-II is the most commonly used in practical applications and is referred to as the DCT in the remainder of this work.
+
+\subsubsection{One-Dimensional DCT}
+
+Given a real-valued input sequence $x[n]$ for $n = 0,1,\dots,N-1$, the one-dimensional DCT-II is defined as
+\begin{equation}
+X[k] = \alpha(k) \sum_{n=0}^{N-1} x[n]
+\cos\left[ \frac{\pi}{N} \left(n + \frac{1}{2}\right) k \right],
+\quad k = 0,1,\dots,N-1,
+\end{equation}
+where the normalization factor $\alpha(k)$ is given by
+\begin{equation}
+\alpha(k) =
+\begin{cases}
+\sqrt{\frac{1}{N}}, & k = 0, \\
+\sqrt{\frac{2}{N}}, & k > 0.
+\end{cases}
+\end{equation}
+This scaling ensures that the transform is orthonormal, preserving signal energy.
+
+\subsubsection{Inverse DCT}
+
+The inverse transform corresponding to the DCT-II is the DCT Type-III and is given by
+\begin{equation}
+x[n] = \sum_{k=0}^{N-1} \alpha(k) X[k]
+\cos\left[ \frac{\pi}{N} \left(n + \frac{1}{2}\right) k \right],
+\quad n = 0,1,\dots,N-1.
+\end{equation}
+Under orthonormal normalization, the forward and inverse transforms share the same cosine kernel, differing only in interpretation.
+
+\subsection{Two-Dimensional DCT}
+
+For two-dimensional signals such as images, the DCT is applied separably along each dimension. Given an $N \times M$ signal $x[n,m]$, the two-dimensional DCT-II is defined as
+\begin{equation}
+\begin{aligned}
+X[u,v] = \alpha(u)\alpha(v)
+\sum_{n=0}^{N-1}
+\sum_{m=0}^{M-1}
+x[n,m] \,
+\cos\left[\frac{\pi}{N}\left(n + \frac{1}{2}\right)u\right]
+\cos\left[\frac{\pi}{M}\left(m + \frac{1}{2}\right)v\right],
+\end{aligned}
+\end{equation}
+where $u = 0,\dots,N-1$ and $v = 0,\dots,M-1$. Due to separability, the 2D DCT can be efficiently computed via successive one-dimensional transforms applied to rows and columns.
+
+\subsection{Frequency Interpretation and Basis Functions}
+
+Each DCT coefficient corresponds to a cosine basis function with increasing spatial frequency as the coefficient index increases. Low-frequency coefficients represent slowly varying, global structure, while high-frequency coefficients capture localized variations such as edges and fine detail. The coefficient at index $k=0$ (or $(u,v)=(0,0)$ in two dimensions) represents the average value of the signal.
+
+This frequency ordering aligns with the perceptual sensitivity of the human visual system, which is more responsive to low-frequency content.
+
+\subsection{Energy Compaction and Sparsity}
+
+A defining characteristic of the DCT is its near-optimal energy compaction for highly correlated signals. For such signals, a small number of low-frequency coefficients capture the majority of the signal energy. Formally, for $K \ll N$,
+\begin{equation}
+\sum_{k=0}^{K} |X[k]|^2 \approx
+\sum_{k=0}^{N-1} |X[k]|^2.
+\end{equation}
+This property leads to sparse representations under coefficient thresholding and forms the theoretical basis for DCT-based compression and sparse signal processing techniques.
+
+\subsection{Matrix Representation}
+
+The DCT can be expressed in matrix form as
+\begin{equation}
+\mathbf{X} = \mathbf{C}\mathbf{x},
+\end{equation}
+where $\mathbf{C} \in \mathbb{R}^{N \times N}$ is an orthogonal transform matrix with elements
+\begin{equation}
+C_{k,n} = \alpha(k)
+\cos\left[\frac{\pi}{N}\left(n + \frac{1}{2}\right)k\right].
+\end{equation}
+Orthogonality implies
+\begin{equation}
+\mathbf{C}^\top \mathbf{C} = \mathbf{I},
+\end{equation}
+ensuring numerical stability and energy preservation.
+
+\subsection{Computational Complexity}
+
+A direct implementation of the DCT requires $\mathcal{O}(N^2)$ operations. However, fast DCT algorithms exploit symmetry and recursive structure to reduce complexity to $\mathcal{O}(N \log N)$, analogous to the Fast Fourier Transform. These algorithms are essential for large-scale and real-time applications.
+
+
+For a two-dimensional signal of size $N \times M$, a naive implementation of the 2D DCT requires $\mathcal{O}(N^2 M^2)$ operations. However, due to the separability of the DCT kernel, the 2D transform can be computed by applying one-dimensional DCTs independently along each dimension.
+
+Specifically, applying $M$ one-dimensional DCTs of length $N$ to the rows followed by $N$ one-dimensional DCTs of length $M$ to the columns yields a total computational complexity of
+\begin{equation}
+\mathcal{O}(NM \log N + NM \log M).
+\end{equation}
+
+For square inputs where $N = M$, this simplifies to
+\begin{equation}
+\mathcal{O}(N^2 \log N),
+\end{equation}
+which is the standard complexity of fast two-dimensional DCT implementations used in image and video processing systems.
+
+\section{Implementation and Evaluation}
+
+\subsection{Overview of the Solution}
+
+The objective of this work is to accelerate the computation of a global two-dimensional Discrete Cosine Transform (2D DCT) for large images using GPU-based optimizations. The solution is structured as a sequence of progressively optimized implementations, starting from a naïve baseline and incrementally introducing architectural and algorithmic improvements. This staged design enables clear attribution of performance gains to individual optimizations.
+
+The baseline implementation directly evaluates the mathematical definition of the 2D DCT using nested summations. While numerically accurate and straightforward, this approach exhibits poor scalability due to its high computational complexity and serves primarily as a correctness and performance reference.
+
+The core optimization reformulates the 2D DCT using its separability property as a matrix multiplication of the form $\mathbf{C} \mathbf{X} \mathbf{C}^\top$ (look at the appendix for mathematical intuition). This structure allows the computation to be mapped efficiently onto GPU matrix multiplication kernels, enabling tiling and effective use of shared memory. \\
+
+\noindent Subsequent optimizations focus on memory behavior and execution overlap. Pinned host memory is used to reduce host--device transfer overhead, and BF16 precision is employed for input and intermediate storage to reduce memory footprint and bandwidth consumption. CUDA streams are introduced to overlap data transfers with computation by processing image tiles concurrently. \\
+
+\noindent Further performance improvements are achieved through kernel fusion, combining multiple DCT stages into a single GPU kernel to reduce global memory traffic and kernel launch overhead. Finally, a sparse-output variant exploits the inherent energy compaction of the DCT by thresholding small-magnitude coefficients and writing only significant values using warp-aggregated atomics.
+
+The main challenges include balancing numerical accuracy under reduced precision, managing control-flow divergence introduced by sparsity, and maintaining kernel efficiency under aggressive fusion. Alternative approaches, such as FFT-based DCTs and purely CPU-based parallelization are considered later.
+
+\subsection{Pseudocode}
+
+\subsubsection{Naïve Global 2D DCT (Baseline)}
+
+\begin{verbatim}
+function DCT2D_NAIVE(X):
+    N = image dimension
+    for u = 0..N-1:
+        for v = 0..N-1:
+            sum = 0
+            for x = 0..N-1:
+                for y = 0..N-1:
+                    sum += X[x,y] *
+                           cos(pi*(x+0.5)*u/N) *
+                           cos(pi*(y+0.5)*v/N)
+            D[u,v] = alpha(u)*alpha(v)*sum
+    return D
+\end{verbatim}
+
+This implementation directly evaluates the 2D DCT definition. Its computational cost grows rapidly with image size and motivates the need for optimization.
+
+\subsubsection{Optimized Sparse Fused GPU DCT}
+
+\begin{verbatim}
+function DCT2D_SPARSE_FUSED(X_host, threshold):
+    allocate pinned host memory
+    allocate BF16 device buffers and sparse output buffers
+    precompute and upload DCT matrices C_row, C_col
+    create multiple CUDA streams
+
+    for each image tile in round-robin streams:
+        async copy tile to device (FP32 -> BF16)
+        launch fused kernel:
+            load BF16 tile -> FP32 (shared memory)
+            Y = C_row * X_tile
+            Z = Y * C_col^T
+            if |Z(u,v)| >= threshold:
+                write (value, index) using warp-aggregated atomics
+
+    synchronize streams
+    copy sparse output back to host
+    return sparse coefficients
+\end{verbatim}
+
+\noindent Rather than computing and storing all coefficients, this implementation applies a magnitude-based threshold to each output coefficient:
+\[
+|Z(u,v)| \ge \tau,
+\]
+where $\tau$ is a fixed sparsity threshold. Only coefficients whose magnitude exceeds the threshold are considered significant and written to the output, while smaller coefficients are implicitly treated as zero.
+
+
+
+\subsection{Evaluation}
+
+Performance is evaluated by measuring end-to-end execution time for image sizes ranging from $8 \times 8$ to $4096 \times 4096$. Timings include kernel execution and relevant memory operations. All GPU experiments were conducted on an NVIDIA V100 GPU.
+
+The naïve implementation scales poorly, with execution time increasing sharply for large images. Reformulating the DCT as a matrix multiplication and introducing pinned memory and BF16 storage yields substantial speedups. Streamed execution further improves performance by overlapping computation and data movement. Kernel fusion reduces overhead at the cost of some numerical precision. The sparse-output variant achieves the best performance for large images by exploiting the DCT’s inherent coefficient sparsity.
+
+% A comparison to a multi-core CPU-based implementation has not yet been performed and is left as future work. Placeholder values will be added once CPU benchmarks are available.
+
+\subsection{Timing Results}
+
+Execution times (in milliseconds) for each implementation and test case are summarized below.
+
+\begin{center}
+\begin{tabular}{lcccc}
+\toprule
+Implementation & $8\times8$ & $300\times300$ & $2048\times2048$ & $4096\times4096$ \\
+\midrule
+Naïve Global DCT (dct\_basic) & 0.160 & 0.446 & 74.130 & 537.309 \\
+Pinned + BF16 (dct\_normal\_nostreams) & 0.078 & 0.152 & 21.623 & 161.812 \\
+Streamed Tiled MatMul (dct\_normal) & 0.082 & 0.155 & 16.216 & 122.705 \\
+Fused BF16 Kernel (dct\_fused\_kernel) & 0.049 & 0.170 & 11.511 & 89.914 \\
+Sparse Fused DCT (dct\_sparse\_fused) & 0.130 & 0.197 & 6.824 & 50.758 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+For small inputs, performance is dominated by kernel launch and overhead. For large images, the benefits of streaming, fusion, and sparsity become increasingly pronounced.
+
+\subsection{Discussion}
+
+The results demonstrate that substantial acceleration of the global 2D DCT is achievable by exploiting both mathematical structure and GPU architectural features. Dense GPU implementations already outperform the naïve baseline by an order of magnitude for large images, while sparse computation provides an additional performance dimension that depends on signal structure rather than size alone.\\
+
+\noindent There exists a clear trade-off between numerical accuracy and performance. Aggressive fusion and reduced precision yield the highest throughput but may not be suitable for applications requiring exact coefficients. Sparse computation preserves dominant low-frequency content while discarding insignificant coefficients, making it well suited for compression-oriented or approximate workloads. \\
+
+\noindent Several alternative approaches were explored but ultimately discarded due to inferior performance. A Compressed Sparse Row (CSR) representation was evaluated for storing sparse DCT outputs; however, constructing CSR structures on the GPU introduced substantial overhead and synchronization costs. Because sparsity emerges dynamically after thresholding, the cost of building and managing CSR metadata outweighed its benefits.
+
+\noindent Attempts were also made to optimize the naïve global DCT formulation directly without reformulating it as a matrix multiplication. Despite applying shared-memory buffering and loop-level optimizations, these versions remained bottlenecked by low arithmetic intensity and poor data reuse, resulting in worse performance than the matrix-based approach.
+
+\noindent Overall, these alternatives were discarded because they increased overhead, reduced memory locality, or limited GPU utilization, leading to worse end-to-end execution times compared to the final optimized design.
+
+\section{Discrete Cosine Transform via FFT}
+
+\subsection{Introduction}
+
+The Discrete Cosine Transform (DCT) can be computed efficiently using the Fast Fourier Transform (FFT) by exploiting the mathematical relationship between cosine transforms and Fourier transforms. In particular, the DCT-II can be derived from the Discrete Fourier Transform (DFT) by applying the FFT to a symmetrically reordered version of the input signal and extracting the real-valued cosine components.
+
+The primary motivation for this approach is the availability of highly optimized GPU FFT libraries, such as cuFFT, which provide excellent performance for large-scale transforms. Reformulating the DCT in terms of FFTs enables the use of these mature libraries without explicitly implementing cosine-based kernels. (Look at the appendix for math behind it)
+
+\subsection{Optimized FFT-Based Implementation}
+
+The optimized FFT-based implementation uses CUDA streams to overlap memory transfers, FFT execution, and post-processing. The input image is processed in chunks, enabling concurrent execution across multiple streams and improved GPU utilization.
+
+\subsubsection{Pseudocode}
+
+\begin{verbatim}
+function DCT2D_FFT_STREAMED(input_image):
+    allocate device buffers
+    create multiple CUDA streams
+    create 1D FFT plans per stream
+
+    # Phase 1: Row-wise DCT
+    for each stream s:
+        select row chunk for stream s
+        async copy chunk to device
+        reorder rows to encode cosine symmetry
+        perform real-to-complex FFT along rows
+        apply phase correction and normalization
+        write row-DCT output
+        transpose into intermediate buffer
+
+    synchronize all streams
+
+    # Phase 2: Column-wise DCT
+    for each stream s:
+        select column chunk
+        reorder columns
+        perform real-to-complex FFT
+        apply phase correction and normalization
+        write final DCT coefficients
+
+    synchronize all streams
+    copy result back to host
+\end{verbatim}
+
+\subsection{Timing Results}
+
+Execution times for FFT-based DCT implementations are reported in milliseconds.
+
+\begin{center}
+\begin{tabular}{lcccc}
+\toprule
+Implementation & $8\times8$ & $300\times300$ & $2048\times2048$ & $4096\times4096$ \\
+\midrule
+FFT DCT (No Streams) & 18.414 & 36.975 & 52.245 & 75.212 \\
+FFT DCT (Streamed) & 0.245 & 0.195 & 3.025 & 11.745 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Evaluation}
+
+The non-streamed FFT-based DCT exhibits poor performance, particularly for small and medium-sized inputs, due to FFT planning overhead, kernel launch latency, and the relatively high computational cost of FFT operations. For large images, performance improves but remains limited by redundant computation inherent in the FFT-based approach. 
+
+\noindent The streamed FFT-based implementation significantly improves performance by overlapping memory transfers with FFT execution. For large inputs, streaming amortizes FFT overhead and leads to substantial speedups. However, even in this optimized form, the FFT-based DCT performs unnecessary complex-valued computations and data rearrangements that do not directly contribute to the final DCT coefficients.
+
+\noindent To further analyze performance characteristics, NVIDIA Nsight Compute was used to profile the streamed FFT-based DCT implementation for the $4096 \times 4096$ input. The profiling results indicate that the kernel achieves approximately $80\%$ of peak memory throughput and $65\%$ of peak compute throughput.
+
+\subsection{Discussion}
+
+While FFT-based DCT computation is mathematically correct and benefits from highly optimized FFT libraries, it is not ideally matched to the cosine-only, real-valued structure of the DCT. The need for input reordering, complex arithmetic, phase correction, and transposition introduces overhead that cannot be fully eliminated.
+
+
+\newpage
+
+
+\section{Appendix}
+\subsection{Mathematical Background - Matrix Multiplication}
+The core optimization reformulates the two-dimensional DCT using its separability property as a matrix multiplication of the form
+\[
+\mathbf{X}_{\text{DCT}} = \mathbf{C}\mathbf{X}\mathbf{C}^\top.
+\]
+This reformulation is possible due to the separability of the cosine basis functions used in the DCT.
+
+Starting from the definition of the 2D DCT, each output coefficient $X(u,v)$ is computed as a double summation over the input signal:
+\[
+X(u,v) = \alpha(u)\alpha(v)
+\sum_{x=0}^{N-1}\sum_{y=0}^{M-1}
+x(x,y)\,
+\cos\left(\frac{\pi}{N}\left(x+\tfrac{1}{2}\right)u\right)
+\cos\left(\frac{\pi}{M}\left(y+\tfrac{1}{2}\right)v\right).
+\]
+The cosine terms in the horizontal and vertical dimensions are independent, allowing the summation to be factored into two successive linear transforms. By defining a DCT matrix $\mathbf{C}$ whose rows correspond to cosine basis functions, the computation can be decomposed into a row-wise transform followed by a column-wise transform:
+\[
+\mathbf{Y} = \mathbf{C}\mathbf{X}, \quad
+\mathbf{X}_{\text{DCT}} = \mathbf{Y}\mathbf{C}^\top.
+\]
+
+This formulation is mathematically equivalent to the direct definition but exposes a dense linear algebra structure that maps efficiently to GPU hardware. Matrix multiplication enables tiling, data reuse in shared memory, and high arithmetic intensity, which are critical for achieving high throughput on modern GPUs.
+
+\subsection{Mathematical Background - FFT}
+
+For a one-dimensional signal $x[n]$, the DCT-II is defined as
+\begin{equation}
+X[k] = \alpha(k)\sum_{n=0}^{N-1} x[n]
+\cos\left(\frac{\pi}{N}\left(n + \tfrac{1}{2}\right)k\right),
+\end{equation}
+where $\alpha(k)$ denotes the standard DCT normalization factor.
+
+This expression can be obtained from the DFT by observing that cosine functions correspond to the real part of complex exponentials. By reordering the input sequence into a specific even--odd pattern and applying a real-to-complex FFT, the DCT coefficients can be recovered through a phase correction and scaling of the FFT output.
+
+For the two-dimensional case, the separability of the DCT allows this procedure to be applied independently along each dimension. The 2D DCT is therefore computed by applying a 1D FFT-based DCT to each row, transposing the intermediate result, and applying the same procedure to each column.
+
+
+
+% \bibliographystyle{alpha}
+% \bibliography{sample}
+
+\end{document}
