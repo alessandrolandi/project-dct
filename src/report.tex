@@ -311,6 +311,24 @@ The non-streamed FFT-based DCT exhibits poor performance, particularly for small
 
 While FFT-based DCT computation is mathematically correct and benefits from highly optimized FFT libraries, it is not ideally matched to the cosine-only, real-valued structure of the DCT. The need for input reordering, complex arithmetic, phase correction, and transposition introduces overhead that cannot be fully eliminated.
 
+\section{JPEG Compression and Block-Based DCT}
+
+\subsection{JPEG Image Compression Overview}
+
+JPEG (Joint Photographic Experts Group) is the most widely used lossy image compression standard, achieving significant compression ratios for typical photographic content while maintaining acceptable visual quality. The compression pipeline consists of color space conversion, block partitioning, DCT transformation, quantization, zigzag ordering, and entropy coding.
+
+The process begins by converting RGB to YCbCr color space, separating luminance (Y) from chrominance (Cb, Cr) components. Images are then partitioned into non-overlapping 8×8 pixel blocks. The two-dimensional DCT transforms each spatial-domain block into a frequency-domain coefficient matrix, where position (0,0) represents the DC (average intensity) and the remaining 63 positions represent AC coefficients of increasing spatial frequency. For natural images, energy concentrates in low-frequency coefficients (upper-left), while high-frequency coefficients (lower-right) typically have small magnitudes.
+
+\subsection{Quantization and Zigzag Ordering}
+
+DCT coefficients are quantized by dividing by quantization table values and rounding to integers, representing the primary source of lossy compression. Quantization tables scale according to a quality parameter (1-100), with higher values producing less aggressive quantization and larger files.
+
+Coefficients are then reordered using a zigzag pattern scanning from low to high frequencies (upper-left to lower-right), grouping non-zero values together and creating long zero runs that enable efficient entropy coding.
+
+\subsection{Entropy Coding}
+
+The final stage applies Huffman coding to the quantized, reordered coefficients. The DC coefficient is encoded using differential pulse-code modulation (DPCM), storing only the difference from the previous block's DC value. AC coefficients are encoded using run-length encoding to represent sequences of zero coefficients efficiently, followed by Huffman coding of the (run-length, value) pairs.
+
 
 \newpage
 
