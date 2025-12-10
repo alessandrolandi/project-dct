@@ -329,6 +329,30 @@ Coefficients are then reordered using a zigzag pattern scanning from low to high
 
 The final stage applies Huffman coding to the quantized, reordered coefficients. The DC coefficient is encoded using differential pulse-code modulation (DPCM), storing only the difference from the previous block's DC value. AC coefficients are encoded using run-length encoding to represent sequences of zero coefficients efficiently, followed by Huffman coding of the (run-length, value) pairs.
 
+\section{PPM Format and Image Preprocessing}
+
+\subsection{Portable Pixmap Format}
+
+The Portable Pixmap (PPM) format is an uncompressed raster image format that stores pixel data in a simple, human-readable structure. PPM images store full RGB color information without any compression, making them ideal for testing compression algorithms. The format consists of a header specifying image dimensions and maximum color value, followed by raw pixel data.
+
+We use the P6 (binary) variant of PPM, which stores RGB values as unsigned 8-bit integers in row-major order. Each pixel consists of three consecutive bytes representing red, green, and blue channel intensities. The simplicity of PPM parsing (requiring only header parsing and direct memory reads) makes it preferable to more complex formats that would require more processing before performing the DCT.
+
+\subsection{RGB to YCbCr Color Space Conversion}
+
+JPEG operates in the YCbCr color space rather than RGB. The conversion is performed using the ITU-R BT.601 standard transformation:
+\begin{align}
+Y &= 0.299R + 0.587G + 0.114B \\
+C_b &= -0.168736R - 0.331264G + 0.5B \\
+C_r &= 0.5R - 0.418688G - 0.081312B
+\end{align}
+
+This transformation concentrates most visual information in the Y (luminance) channel, allowing more aggressive compression of the chrominance channels. The conversion is performed during block extraction, immediately before DCT transformation.
+
+\subsection{Block Extraction and Padding}
+
+Images are partitioned into 8×8 blocks by scanning left-to-right, top-to-bottom. When image dimensions are not multiples of 8, the rightmost and bottom blocks are padded with zeros to complete 8×8 boundaries. Each 8×8 block is extracted as a flat 64-element array in row-major order, suitable for direct input to DCT functions.
+
+The block extraction process operates independently on each color channel (Y, Cb, Cr), producing three separate streams of 8×8 blocks. For an image of width $W$ and height $H$, this produces $\lceil W/8 \rceil \times \lceil H/8 \rceil$ blocks per channel.
 
 \newpage
 
