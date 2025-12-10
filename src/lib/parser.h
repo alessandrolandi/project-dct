@@ -24,7 +24,7 @@ void free_ppm(PPMImage *img);
 int write_ppm(const char *filename, PPMImage *img, int binary);
 
 
-// JPEG encoding structures
+//JPEG encoding structures
 typedef struct {
     uint16_t code[256];
     uint8_t size[256];
@@ -40,7 +40,7 @@ typedef struct {
     int buffer_pos;
 } BitstreamWriter;
 
-// JPEG marker constants
+//JPEG marker constants
 #define JPEG_SOI   0xFFD8
 #define JPEG_EOI   0xFFD9
 #define JPEG_SOF0  0xFFC0

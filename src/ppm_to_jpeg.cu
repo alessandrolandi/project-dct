@@ -5,6 +5,107 @@
 #include <cuda_runtime.h>
 #include "lib/parser.h"
 #include "dct.cuh"
+#include "dct8x8.cuh"
+
+//function pointer type for 8x8 DCT implementations
+typedef void (*dct_8x8_func)(const float* input, float* output);
+
+void dct2d_wrapper(const float* input, float* output) {
+    dct2d(input, output, 8, 8);
+}
+
+void dct2d_fft_wrapper(const float* input, float* output) {
+    dct2d_fft(input, output, 8, 8);
+}
+
+//track if dct8x8 GPU constants are initialized
+static bool dct8x8_initialized = false;
+
+//initialize dct8x8 GPU constant memory 
+void init_dct8x8_gpu() {
+    if (!dct8x8_initialized) {
+        init_cos_table_8_gpu();
+        init_lee_table_8_gpu();
+        dct8x8_initialized = true;
+    }
+}
+
+void dct8x8_gpu_separable_wrapper(const float* input, float* output) {
+    init_dct8x8_gpu();
+
+    float *d_input, *d_output;
+    cudaMalloc(&d_input, 64 * sizeof(float));
+    cudaMalloc(&d_output, 64 * sizeof(float));
+    cudaMemcpy(d_input, input, 64 * sizeof(float), cudaMemcpyHostToDevice);
+
+    dim3 block(8, 8);
+    dim3 grid(1, 1);
+    dct8x8_gpu_naive_separable_shared_memory<<<grid, block>>>(d_input, d_output, 8, 8);
+    cudaDeviceSynchronize();
+
+    cudaMemcpy(output, d_output, 64 * sizeof(float), cudaMemcpyDeviceToHost);
+
+    //apply orthonormal scaling (dct8x8 produces unscaled coefficients)
+    const float scale_dc = 1.0f / 8.0f;           //1/N for DC (u=0, v=0)
+    const float scale_edge = sqrtf(2.0f) / 8.0f;  //sqrt(2)/N for one AC dimension
+    const float scale_ac = 2.0f / 8.0f;           //2/N for both AC dimensions
+
+    for (int u = 0; u < 8; u++) {
+        for (int v = 0; v < 8; v++) {
+            float scale;
+            if (u == 0 && v == 0) {
+                scale = scale_dc;        //DC component
+            } else if (u == 0 || v == 0) {
+                scale = scale_edge;      //one dimension is DC
+            } else {
+                scale = scale_ac;        //both dimensions are AC
+            }
+            output[u * 8 + v] *= scale;
+        }
+    }
+
+    cudaFree(d_input);
+    cudaFree(d_output);
+}
+
+//wrapper for dct8x8 GPU Lee's algorithm with shared memory
+void dct8x8_gpu_lee_wrapper(const float* input, float* output) {
+    init_dct8x8_gpu();
+
+    float *d_input, *d_output;
+    cudaMalloc(&d_input, 64 * sizeof(float));
+    cudaMalloc(&d_output, 64 * sizeof(float));
+    cudaMemcpy(d_input, input, 64 * sizeof(float), cudaMemcpyHostToDevice);
+
+    dim3 block(8, 8);
+    dim3 grid(1, 1);
+    dct8x8_gpu_lee8_shared<<<grid, block>>>(d_input, d_output, 8, 8);
+    cudaDeviceSynchronize();
+
+    cudaMemcpy(output, d_output, 64 * sizeof(float), cudaMemcpyDeviceToHost);
+
+    //need to apply orthonormal scaling (dct8x8 produces unscaled coefficients)
+    const float scale_dc = 1.0f / 8.0f;           //1/N for DC (u=0, v=0)
+    const float scale_edge = sqrtf(2.0f) / 8.0f;  //sqrt(2)/N for one AC dimension
+    const float scale_ac = 2.0f / 8.0f;           //2/N for both AC dimensions
+
+    for (int u = 0; u < 8; u++) {
+        for (int v = 0; v < 8; v++) {
+            float scale;
+            if (u == 0 && v == 0) {
+                scale = scale_dc;        //DC component
+            } else if (u == 0 || v == 0) {
+                scale = scale_edge;      //one dimension is DC
+            } else {
+                scale = scale_ac;        //both dimensions are AC
+            }
+            output[u * 8 + v] *= scale;
+        }
+    }
+
+    cudaFree(d_input);
+    cudaFree(d_output);
+}
 
 //standard JPEG quantization tables
 __constant__ uint8_t d_quant_luma[64] = {
@@ -411,7 +512,15 @@ static void write_sos(FILE *fp) {
 }
 
 //main compression function
-int compress_jpeg(const char *input_file, const char *output_file, int quality) {
+// Structure to hold compression statistics
+typedef struct {
+    size_t input_size;
+    size_t output_size;
+    float compression_ratio;
+    double dct_accuracy_mse;  // Mean squared error of DCT reconstruction
+} CompressionStats;
+
+int compress_jpeg(const char *input_file, const char *output_file, int quality, dct_8x8_func dct_func, CompressionStats *stats) {
     //load PPM image
     PPMImage *ppm_img = parse_ppm(input_file);
 
@@ -424,6 +533,12 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality) 
     int width = ppm_img->width;
     int height = ppm_img->height;
     Pixel *pixels = ppm_img->pixels;
+
+    //calculagte input size
+    if (stats) {
+        stats->input_size = width * height * 3;
+        stats->dct_accuracy_mse = 0.0;
+    }
 
     //calculate blocks
     int blocks_x = (width + 7) / 8;
@@ -477,8 +592,8 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality) 
                     }
                 }
 
-                //apply 2D DCT using reference implementation
-                dct2d(block, dct_block, 8, 8);
+                //apply 2D DCT
+                dct_func(block, dct_block);
 
                 //copy to flat array (channel offset + block offset)
                 int block_idx = channel * num_blocks + by * blocks_x + bx;
@@ -556,6 +671,17 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality) 
 
     fclose(fp);
 
+    // Measure output file size
+    if (stats) {
+        FILE *fp_check = fopen(output_file, "rb");
+        if (fp_check) {
+            fseek(fp_check, 0, SEEK_END);
+            stats->output_size = ftell(fp_check);
+            fclose(fp_check);
+            stats->compression_ratio = (float)stats->input_size / (float)stats->output_size;
+        }
+    }
+
     //cleanup
     cudaFree(d_dct_blocks);
     cudaFree(d_quantized);
@@ -567,13 +693,13 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality) 
     return 1;
 }
 
-int ppm_to_jpg(const char *input_file, const char *output_file, int quality){
+int ppm_to_jpg(const char *input_file, const char *output_file, int quality, dct_8x8_func dct_func, CompressionStats *stats){
     if (quality < 1 || quality > 100) {
         fprintf(stderr, "Quality must be 1-100\n");
         return 1;
     }
 
-    if (!compress_jpeg(input_file, output_file, quality)) {
+    if (!compress_jpeg(input_file, output_file, quality, dct_func, stats)) {
         fprintf(stderr, "Compression failed\n");
         return 1;
     }
@@ -581,22 +707,75 @@ int ppm_to_jpg(const char *input_file, const char *output_file, int quality){
 }
 
 /*
-Example usage
+Example usage 
+*/
 
 int main(int argc, char *argv[]) {
-    if (argc < 3) {
-        printf("Usage: %s <input.ppm> <output.jpg> [quality]\n", argv[0]);
+    if (argc < 2) {
+        printf("Usage: %s <input.ppm> [quality]\n", argv[0]);
         printf("  input.ppm  - Uncompressed PPM image file\n");
-        printf("  output.jpg - Output JPEG file\n");
         printf("  quality    - 1-100 (default: 85, higher = better quality)\n");
         return 1;
     }
 
     const char *input_file = argv[1];
-    const char *output_file = argv[2];
-    int quality = (argc > 3) ? atoi(argv[3]) : 85;
+    int quality = (argc > 2) ? atoi(argv[2]) : 85;
 
-    ppm_to_jpg(input_file, output_file, quality);
+    if (quality < 1 || quality > 100) {
+        fprintf(stderr, "Error: Quality must be between 1 and 100\n");
+        return 1;
+    }
+
+    printf("JPEG Compression - Comparing DCT Implementations\n");
+    printf("Input file: %s\n", input_file);
+    printf("Quality: %d\n\n", quality);
+
+    struct {
+        const char *name;
+        const char *output_file;
+        dct_8x8_func dct_func;
+    } implementations[] = {
+        {"CUDA DCT", "output_dct2d.jpg", dct2d_wrapper},
+        {"FFT-based DCT", "output_fft.jpg", dct2d_fft_wrapper},
+        {"DCT8x8 GPU Separable+Shared", "output_dct8x8_separable.jpg", dct8x8_gpu_separable_wrapper},
+        {"DCT8x8 GPU Lee's Algorithm", "output_dct8x8_lee.jpg", dct8x8_gpu_lee_wrapper},
+    };
+
+    int num_implementations = sizeof(implementations) / sizeof(implementations[0]);
+    CompressionStats stats_array[num_implementations];
+
+    for (int i = 0; i < num_implementations; i++) {
+        printf("Processing with: %s\n", implementations[i].name);
+        printf("Output file: %s\n", implementations[i].output_file);
+
+        int result = ppm_to_jpg(input_file, implementations[i].output_file,
+                                quality, implementations[i].dct_func, &stats_array[i]);
+
+        if (result == 0) {
+            printf("Creatd %s\n", implementations[i].output_file);
+            printf("File size: %zu bytes (%.2f KB)\n",
+                   stats_array[i].output_size,
+                   stats_array[i].output_size / 1024.0);
+            printf("Compression ratio: %.2fx\n", stats_array[i].compression_ratio);
+        } else {
+            printf("Failed to create %s\n", implementations[i].output_file);
+        }
+        printf("\n");
+    }
+
+    printf("Compression Summary: \n");
+    printf("Input size: %zu bytes (%.2f KB)\n\n",
+           stats_array[0].input_size,
+           stats_array[0].input_size / 1024.0);
+
+    printf("%-45s %12s %10s\n", "Implementation", "Size (KB)", "Ratio");
+
+    for (int i = 0; i < num_implementations; i++) {
+        printf("%-45s %12.2f %9.2fx\n",
+               implementations[i].name,
+               stats_array[i].output_size / 1024.0,
+               stats_array[i].compression_ratio);
+    }
+
+    return 0;
 }
-
-*/

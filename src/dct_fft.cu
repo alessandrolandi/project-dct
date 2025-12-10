@@ -2,6 +2,7 @@
 #include <cufft.h>
 #include <stdio.h>
 #include <math.h>
+#include "dct.cuh"
 
 #define PI 3.14159265358979323846
 #define CUDA_CHECK(call) { \

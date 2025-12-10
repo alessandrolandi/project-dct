@@ -12,6 +12,7 @@ void idct1d(const float* h_input, float* h_output, int N);
 // 2D DCT/IDCT
 void dct2d(const float* h_input, float* h_output, int rows, int cols);
 void idct2d(const float* h_input, float* h_output, int rows, int cols);
+void dct2d_fft(const float* h_input, float* h_output, int rows, int cols);
 
 // CUDA kernels
 __global__ void dct8x8_kernel(const float* input, float* output,
