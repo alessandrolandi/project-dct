@@ -1,4 +1,4 @@
-#include "ppm_parser.h"
+#include "parser.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -229,15 +229,3 @@ float * flatten(Pixel *pixels, int width, int height){
     return out;
 }
 
-/*
-int main(int argc, char* argv[] ){
-
-    PPMImage *test = parse_ppm(argv[1]);
-
-    for(int i = 0; i < test->width * test->height; i++ ){
-        printf("%f, %f, %f\n", test->pixels[i].r, test->pixels[i].g, test->pixels[i].b);
-    }
-
-    free_ppm(test);
-}
-*/

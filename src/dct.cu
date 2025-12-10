@@ -1,8 +1,9 @@
 #include <cuda_runtime.h>
 #include <stdio.h>
 #include <math.h>
+#include "dct.cuh"
 
-#define PI 3.1415
+#define PI 3.14159265358979323846
 
 // 1D DCT-II kernel (basic version)
 __global__ void dct1d_kernel(const float* input, float* output, int N) {
@@ -53,20 +54,54 @@ __global__ void dct2d_rows_kernel(const float* input, float* output, int rows, i
     }
 }
 
-//input to this kerbel would be the output from the prev kernel (dct2d_rows_kernel)
+//input to this kernel would be the output from the prev kernel (dct2d_rows_kernel)
 __global__ void dct2d_cols_kernel(const float* input, float* output, int rows, int cols) {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int k = blockIdx.y * blockDim.y + threadIdx.y;
-    
+
     if (col < cols && k < rows) {
         float sum = 0.0f;
         float scale = (k == 0) ? sqrtf(1.0f / rows) : sqrtf(2.0f / rows);
-        
+
         for (int n = 0; n < rows; n++) {
             sum += input[n * cols + col] * cosf(PI * k * (2 * n + 1) / (2.0f * rows));
         }
-        
+
         output[k * cols + col] = scale * sum;
+    }
+}
+
+// 2D IDCT rows kernel
+__global__ void idct2d_rows_kernel(const float* input, float* output, int rows, int cols) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int n = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (row < rows && n < cols) {
+        float sum = 0.0f;
+
+        for (int k = 0; k < cols; k++) {
+            float scale = (k == 0) ? sqrtf(1.0f / cols) : sqrtf(2.0f / cols);
+            sum += scale * input[row * cols + k] * cosf(PI * k * (2 * n + 1) / (2.0f * cols));
+        }
+
+        output[row * cols + n] = sum;
+    }
+}
+
+// 2D IDCT columns kernel
+__global__ void idct2d_cols_kernel(const float* input, float* output, int rows, int cols) {
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    int n = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (col < cols && n < rows) {
+        float sum = 0.0f;
+
+        for (int k = 0; k < rows; k++) {
+            float scale = (k == 0) ? sqrtf(1.0f / rows) : sqrtf(2.0f / rows);
+            sum += scale * input[k * cols + col] * cosf(PI * k * (2 * n + 1) / (2.0f * rows));
+        }
+
+        output[n * cols + col] = sum;
     }
 }
 
@@ -111,24 +146,50 @@ void idct1d(const float* h_input, float* h_output, int N) {
 void dct2d(const float* h_input, float* h_output, int rows, int cols) {
     float *d_input, *d_temp, *d_output;
     size_t size = rows * cols * sizeof(float);
-    
+
     cudaMalloc(&d_input, size);
     cudaMalloc(&d_temp, size);
     cudaMalloc(&d_output, size);
-    
+
     cudaMemcpy(d_input, h_input, size, cudaMemcpyHostToDevice);
-    
+
     dim3 blockSize(16, 16);
     dim3 gridSize((cols + 15) / 16, (rows + 15) / 16); //hardcoded values for now ; will change later
-    
+
     // Apply DCT to rows
     dct2d_rows_kernel<<<gridSize, blockSize>>>(d_input, d_temp, rows, cols);
-    
+
     // Apply DCT to columns
     dct2d_cols_kernel<<<gridSize, blockSize>>>(d_temp, d_output, rows, cols);
-    
+
     cudaMemcpy(h_output, d_output, size, cudaMemcpyDeviceToHost);
-    
+
+    cudaFree(d_input);
+    cudaFree(d_temp);
+    cudaFree(d_output);
+}
+
+void idct2d(const float* h_input, float* h_output, int rows, int cols) {
+    float *d_input, *d_temp, *d_output;
+    size_t size = rows * cols * sizeof(float);
+
+    cudaMalloc(&d_input, size);
+    cudaMalloc(&d_temp, size);
+    cudaMalloc(&d_output, size);
+
+    cudaMemcpy(d_input, h_input, size, cudaMemcpyHostToDevice);
+
+    dim3 blockSize(16, 16);
+    dim3 gridSize((cols + 15) / 16, (rows + 15) / 16);
+
+    // Apply IDCT to rows first
+    idct2d_rows_kernel<<<gridSize, blockSize>>>(d_input, d_temp, rows, cols);
+
+    // Apply IDCT to columns
+    idct2d_cols_kernel<<<gridSize, blockSize>>>(d_temp, d_output, rows, cols);
+
+    cudaMemcpy(h_output, d_output, size, cudaMemcpyDeviceToHost);
+
     cudaFree(d_input);
     cudaFree(d_temp);
     cudaFree(d_output);
@@ -171,7 +232,8 @@ int main() {
         13, 14, 15, 16
     };
     float output2d[16];
-    
+    float reconstructed2d[16];
+
     printf("2D DCT input:\n");
     for (int i = 0; i < rows; i++) {
         for (int j = 0; j < cols; j++) {
@@ -180,9 +242,9 @@ int main() {
         printf("\n");
     }
     printf("\n");
-    
+
     dct2d(input2d, output2d, rows, cols);
-    
+
     printf("2D DCT coefficients:\n");
     for (int i = 0; i < rows; i++) {
         for (int j = 0; j < cols; j++) {
@@ -190,6 +252,46 @@ int main() {
         }
         printf("\n");
     }
-    
+    printf("\n");
+
+    //test IDCT
+    idct2d(output2d, reconstructed2d, rows, cols);
+
+    printf("2D IDCT (reconstructed):\n");
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            printf("%.2f ", reconstructed2d[i * cols + j]);
+        }
+        printf("\n");
+    }
+    printf("\n");
+
+    //calculate reconstruction error
+    float error = 0.0f;
+    for (int i = 0; i < rows * cols; i++) {
+        error += fabs(input2d[i] - reconstructed2d[i]);
+    }
+    printf("Total reconstruction error: %.6f\n", error);
+
+    //test with 8x8 block (JPEG standard size)
+    printf("\n=== Testing 8x8 block (JPEG standard) ===\n");
+    float block8x8[64];
+    float dct8x8[64];
+    float recon8x8[64];
+
+    //initialize with a simple pattern
+    for (int i = 0; i < 64; i++) {
+        block8x8[i] = (float)(i + 1);
+    }
+
+    dct2d(block8x8, dct8x8, 8, 8);
+    idct2d(dct8x8, recon8x8, 8, 8);
+
+    float error8x8 = 0.0f;
+    for (int i = 0; i < 64; i++) {
+        error8x8 += fabs(block8x8[i] - recon8x8[i]);
+    }
+    printf("8x8 reconstruction error: %.6f\n", error8x8);
+
     return 0;
 }
