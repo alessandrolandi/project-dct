@@ -147,6 +147,12 @@ void initialize_input(float *matrix, int rows, int cols) {
 
 
 int main() {
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+
     size_t size = N * N * sizeof(float);
 
     float *h_input = (float*)malloc(size);
@@ -162,11 +168,21 @@ int main() {
 
     cudaMalloc((void**)&d_input, size);
     cudaMalloc((void**)&d_output, size);
+
+
+    cudaEventRecord(start, 0);
     cudaMemcpy(d_input, h_input, size, cudaMemcpyHostToDevice);
     dct_2d_8x8<<<gridSize, blockSize>>>(d_input, d_output, N);
     
     cudaDeviceSynchronize();
-    cudaMemcpy(h_output, d_output, size, cudaMemcpyHostToDevice);
+    cudaMemcpy(h_output, d_output, size, cudaMemcpyDeviceToHost);
+
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    float elapsed_ms = 0.0f;
+    cudaEventElapsedTime(&elapsed_ms, start, stop);
+
+    printf("\nTime Elapsed: %0f", elapsed_ms);
 
     print_matrix("Output 8x8 Matrix ", h_output, N, N);
 
