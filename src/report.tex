@@ -311,6 +311,95 @@ The non-streamed FFT-based DCT exhibits poor performance, particularly for small
 
 While FFT-based DCT computation is mathematically correct and benefits from highly optimized FFT libraries, it is not ideally matched to the cosine-only, real-valued structure of the DCT. The need for input reordering, complex arithmetic, phase correction, and transposition introduces overhead that cannot be fully eliminated.
 
+\section{Fast Discrete Cosine Transform using Chen's Algorithm} 
+
+Chen's algorithm is based on research paper by Wen-Hsiung Chen, C. Harrison Smith, And S. C. Fralick (1977). This FDCT algorithm comprises only of real operations and was proposed to attain a speed of up to six times faster than the conventional DCT based on FFT implementations. The method, in general  takes $((3N/2) log_2N-1) + 2$ real additions and $Nlog_2N-3N/2+4$ real multiplications and this is approximately 6 times faster than conventional approach using double size FFT. This algorithm acts according to  non-orthonormal version of DCT and IDCT as given below.
+
+\subsection{Chen's Formula}
+The DCT of a discrete function $f(j)$, $j = 0, 1, \cdots, N-1$ is defined as
+$$ F(k)=\frac{2c(k)}{N}\sum_{j=0}^{N-1}f(j)\cos\left[\frac{(2j+1)k\pi}{2N}\right]; \quad k=0,1,\cdots,N-1 \quad $$
+and the inverse transform is
+$$ f(j)=\sum_{k=0}^{N-1}c(k)F(k)\cos\left[\frac{(2j+1)k\pi}{2N}\right]; \quad j=0,1,\cdots,N-1 \quad $$
+where
+$$ c(k)=
+\begin{cases}
+\frac{1}{\sqrt{2}} & \text{for } k=0 \\
+1 & \text{for } k=1,2,\cdots,N-1
+\end{cases}
+$$
+\subsection{Chen's Algorithm}
+The algorithm presented in the paper processes the input as an $N \times 1$ data vector. It achieves its speed by generalizing the decomposition into alternating cosine/sine butterfly matrices with binary matrices. This structure reorders the matrix elements into a form that maintains a recognizable bit-reversed pattern at every other node. 
+
+The algorithm is proposed to initially to work on a $Nx1$ matrix but it can be extended to compute DCT for any $NxN$ matrice where N is of for $2^m$. For $Nx1$ vector $[f]$, expression can be written as $$ [F]=\frac{2}{N}[A_{N}][f] \quad $$. where $F$ is a transformed vector. Here,  $$
+[A_{N}]=[c(k)\cos((2j+1)k\pi/2N)]; \quad j,k=0,1,\cdots,(N-1) \quad 
+$$. 
+
+The algorithms uniqueness comes from its recursive decomposition of $A_N$
+
+$$
+[A_{N}]=[P_{N}]\left[\begin{array}{c|c}
+A_{N/2} & 0 \\
+\hline
+0 & R_{N/2}
+\end{array}\right][B_{N}] \quad
+$$
+$[P_N]$ is an $ N X N $permutation matrix and it permutes the transformed vector from a bit reversed order to a natural order.
+Recursion happens till base matrice is reached of value $$[A_{2}]=\frac{1}{\sqrt{2}}\begin{pmatrix}1 & 1\\ 1 & -1\end{pmatrix}. \quad 
+$$
+$B_N$ and $[B_{N}^{*}]$ is defined as 
+$$
+ [B_{N}]=\begin{pmatrix}I_{N/2} & \overline{I}_{N/2}\\ \overline{I}_{N/2} & -I_{N/2}\end{pmatrix} \quad 
+$$
+$$
+ [B_{N}^{*}]=\begin{pmatrix}-I_{N/2} & \overline{I}_{N/2}\\ \overline{I}_{N/2} & I_{N/2}\end{pmatrix} \quad \quad 
+$$
+$$
+[R_{N/2}]=[c(k)\cos\frac{(2j+1)(2k+1)\pi}{2N}];  \quad j,k=0,1,\cdots,\frac{N}{2}-1 \quad 
+$$
+
+The $[R_{N/2}]$ matrix is decomposed into ($2\log_{2}N-3$) matrices as shown below:
+$$
+[R_{N/2}]=[M1][M2][M3][M4]\cdots[M(2\log_{2}N-3)]. \quad
+$$
+
+The above matrices are made by the following notations, Here, $[I_{N/2}]$ is an identity matrix of the $N/2$, and $\overline{[I}_{N/2i}]$ is the opposite diagonal identity matrix:
+\begin{align*}
+ [{S_{i}}^{k}] &= \sin\frac{k\pi}{i}[I_{N/2i}] \quad  \\
+ [\overline{S}_{i}^{k}] &= \sin\frac{k\pi}{i}\overline{[I}_{N/2i}] \quad \\
+ [{C_{i}}^{k}] &= \cos\frac{k\pi}{i}[I_{N/2i}] \quad  \\
+ [\overline{C}_{i}^{k}] &= \cos\frac{k\pi}{i}\overline{[I}_{N/2i}] \quad 
+\end{align*}
+
+The matrices are of 4 types:
+\begin{itemize}
+     \item \textbf{Type 1:} [M1], the first matrix: Formed by concatenating order-1 sine/cosine matrices: Main Diagonal: ${S_{2N}}^{a_{j}}$ (upper half) and ${C_{2N}}^{a_{j}}$ (lower half). Opposite Diagonal: $\overline{C}_{2N}{}^{a_{j}}$ (upper half) and $\overline{S}_{2N}{}^{a_{j}}$ (lower half). The values $a_j$ are based on the binary bit-reversed representation of $N/2+j-1$.
+     \item \textbf{Type 2:} $[M(2\log_{2}N-3)]$, the last matrix: Formed by concatenating specific matrices: Main Diagonal: $I_{N/8}, -C_{4}^{1}, C_{4}^{1}, I_{N/8}$. Opposite Diagonal: $O_{N/8}, \overline{C}_{4}^{1}, \overline{C}_{4}^{1}, O_{N/8}$.
+     \item \textbf{Type 3:} $[M_{q}]$, the remaining odd numbered matrices [M3], [M5], etc. Formed by repeated concatenation of sequences involving sine and cosine terms:Main Diagonal (Upper Half): $I_{N/2i}, -C_{i}^{k_{j}}, -{S_{i}}^{k_{j}}, I_{N/2i}$ Main Diagonal (Lower Half): $I_{N/2i}, {C_{i}}^{k_{j}}, {S_{i}}^{k_{j}}, I_{N/2i}$. Opposite Diagonal (Upper Half): $O_{N/2i}, \overline{S}_{i}^{k_{j}}, \overline{C}_{i}^{k_{j}}, O_{N/2i}$ Opposite Diagonal (Lower Half):$O_{N/2i}, -\overline{S}_{i}^{k_{j}}, \overline{C}_{i}^{k_{j}}, O_{N/2i}$ 
+     \item \textbf{Type 4:} $[M_{p}]$, the even numbered matrices [M2], [M4], etc. Binary matrices formed by alternating $B_{l}$ and $B_{l}^{*}$ matrices along the main diagonal The order $l$ is $2^{p/2}$
+\end{itemize}   
+
+\subsection{Implementation and Timing}
+This algorithm has been implemented for matrices of types $4x1$, $4x4$, $8x1$, $8x8$. Naive versions of the algorithm compute based on the orthonormal version of DCT formula. Full version implementation of Chen's algorithm works using the non-orthonormal version of DCT formula. Execution times are represented in miliseconds. 
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+Implementation & Input & Elapsed Time \\
+\midrule
+Naive version & 4x4 & 0.175552 \\
+Naive version & 8x8 & 0.203136  \\
+Recursive version & 4x1 & 0.579520 \\
+Recursive version & 4x4 & 1.541440 \\
+Recursive version & 8x1 & 0.373056 \\
+Recursive version & 8x8 & 4.600288 \\
+
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Discussion}
+The naive versions of the algorithm truly show the real additions and multiplication that go in computing the DCT Coefficients. They also show how the butterfly matrices are made and work. Chen's algorithm's uniqueness comes from its decomposition of $A_N$ matrices, Such a structure will work well on CPU due to its recursive nature. However, its timing is high in the GPU version at its current stage due to inclusion of time that goes in repeated allocation and freeing memory that comes with recursive implementation. The code exploits capabilities of threads by avoiding storage of the large amounts of 0s that are core part of sparse matrices that are made when DCT coefficients are computed. However, at lesser size, the kernel launches take up majority of elapsed time. When extended, due to its advantage of dealing with  additions and multiplications, the elapsed time will be comparatively lower than the current version.
+
+
 \section{JPEG Compression and Block-Based DCT}
 
 \subsection{JPEG Image Compression Overview}
