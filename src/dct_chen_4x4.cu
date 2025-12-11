@@ -138,7 +138,13 @@ int main() {
     }
     printf("\n\n");
 
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+   
     dct1d(input_1d, output_1d, N);
+    
     
     printf("FDCT coefficients:\n");
     for (int i = 0; i < N; i++) {
@@ -164,7 +170,13 @@ int main() {
     }
     printf("\n");
     
+    cudaEventRecord(start, 0);
     dct2d(input2d, output2d, N);
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    float elapsed_ms = 0.0f;
+    cudaEventElapsedTime(&elapsed_ms, start, stop);
+    printf("Elapsed Time: %0f\n\n", elapsed_ms);
     
     printf("2D FDCT coefficients:\n");
     for (int i = 0; i < N; i++) { 
