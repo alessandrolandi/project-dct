@@ -518,6 +518,7 @@ typedef struct {
     size_t output_size;
     float compression_ratio;
     double dct_accuracy_mse;  // Mean squared error of DCT reconstruction
+    double dct_time_ms;        // Total DCT computation time in milliseconds
 } CompressionStats;
 
 int compress_jpeg(const char *input_file, const char *output_file, int quality, dct_8x8_func dct_func, CompressionStats *stats) {
@@ -549,6 +550,13 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality, 
     float *h_dct_blocks = (float*)malloc(3 * num_blocks * 64 * sizeof(float));
     int16_t *h_quantized = (int16_t*)malloc(3 * num_blocks * 64 * sizeof(int16_t));
 
+    //create CUDA events for timing
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    //start timing DCT computation
+    cudaEventRecord(start, 0);
 
     //process each color channel convert rgb to YCbCr
     for (int channel = 0; channel < 3; channel++) {
@@ -601,6 +609,19 @@ int compress_jpeg(const char *input_file, const char *output_file, int quality, 
             }
         }
     }
+
+    //stop timing and calculate elapsed time
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    float elapsed_ms = 0;
+    cudaEventElapsedTime(&elapsed_ms, start, stop);
+    if (stats) {
+        stats->dct_time_ms = elapsed_ms;
+    }
+
+    //cleanup timing events
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
 
     //allocate device memory for 3 channels
     float *d_dct_blocks;
@@ -757,6 +778,7 @@ int main(int argc, char *argv[]) {
                    stats_array[i].output_size,
                    stats_array[i].output_size / 1024.0);
             printf("Compression ratio: %.2fx\n", stats_array[i].compression_ratio);
+            printf("DCT time: %.3f ms\n", stats_array[i].dct_time_ms);
         } else {
             printf("Failed to create %s\n", implementations[i].output_file);
         }
@@ -768,13 +790,15 @@ int main(int argc, char *argv[]) {
            stats_array[0].input_size,
            stats_array[0].input_size / 1024.0);
 
-    printf("%-45s %12s %10s\n", "Implementation", "Size (KB)", "Ratio");
+    printf("%-45s %12s %10s %14s\n", "Implementation", "Size (KB)", "Ratio", "DCT Time (ms)");
+    printf("%-45s %12s %10s %14s\n", "---------------", "---------", "-----", "-------------");
 
     for (int i = 0; i < num_implementations; i++) {
-        printf("%-45s %12.2f %9.2fx\n",
+        printf("%-45s %12.2f %9.2fx %13.3f\n",
                implementations[i].name,
                stats_array[i].output_size / 1024.0,
-               stats_array[i].compression_ratio);
+               stats_array[i].compression_ratio,
+               stats_array[i].dct_time_ms);
     }
 
     return 0;
